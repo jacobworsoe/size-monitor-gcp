@@ -100,6 +100,10 @@
     .change-down { background: #c6f6d5; color: var(--green); }
     .change-flat { background: #fefcbf; color: var(--yellow); }
 
+    .btn-danger { background: #fff5f5; color: var(--red); border: 1px solid #fed7d7; padding: .2rem .55rem; font-size: .75rem; }
+    .btn-danger:hover { background: #fed7d7; }
+    td.action-cell { width: 48px; text-align: center; }
+
     .chart-section {
       margin-bottom: 1.5rem;
     }
@@ -221,10 +225,23 @@
           <th data-sort="size">Latest size <span class="sort-arrow">&#9650;</span></th>
           <th data-sort="change" class="hide-mobile">30d change <span class="sort-arrow">&#9650;</span></th>
           <th class="hide-mobile">Last checked</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="monitors-body"></tbody>
     </table>
+  </div>
+</div>
+
+<div id="delete-modal" class="modal-overlay">
+  <div class="modal">
+    <h2>Remove monitor</h2>
+    <p style="margin-bottom:1rem;color:var(--text-muted);font-size:.9rem">This will permanently delete <strong id="delete-name"></strong> and all its historical measurements.</p>
+    <div id="delete-error" class="error-msg" style="display:none"></div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" onclick="hideDeleteModal()">Cancel</button>
+      <button class="btn btn-primary" id="delete-submit" style="background:var(--red)" onclick="submitDelete()">Delete</button>
+    </div>
   </div>
 </div>
 
@@ -248,9 +265,12 @@
 </div>
 
 <script>
-const API_BASE = 'https://europe-west1-python-api-246309.cloudfunctions.net';
-const API_DATA = `${API_BASE}/get-data`;
-const API_ADD  = `${API_BASE}/add-monitor`;
+const API_BASE   = 'https://europe-west1-python-api-246309.cloudfunctions.net';
+const API_DATA   = `${API_BASE}/get-data`;
+const API_ADD    = `${API_BASE}/add-monitor`;
+const API_DELETE = `${API_BASE}/delete-monitor`;
+
+let pendingDeleteUrl = null;
 
 let monitors = [];
 let chart = null;
@@ -302,6 +322,7 @@ function renderTable() {
       <td class="size-cell"><span class="size-kb">${sizeKB}</span> KB</td>
       <td class="hide-mobile" id="change-${hashCode(m.url)}">—</td>
       <td class="hide-mobile">${lastDate}</td>
+      <td class="action-cell"><button class="btn btn-danger" title="Delete monitor" onclick="confirmDelete('${esc(m.url)}','${esc(m.name)}')">✕</button></td>
     </tr>`;
   }).join('');
 
@@ -449,6 +470,62 @@ document.querySelectorAll('th[data-sort]').forEach(th => {
     renderTable();
   });
 });
+
+function confirmDelete(url, name) {
+  pendingDeleteUrl = url;
+  document.getElementById('delete-name').textContent = name;
+  document.getElementById('delete-error').style.display = 'none';
+  document.getElementById('delete-modal').classList.add('visible');
+}
+
+function hideDeleteModal() {
+  pendingDeleteUrl = null;
+  document.getElementById('delete-modal').classList.remove('visible');
+}
+
+async function submitDelete() {
+  if (!pendingDeleteUrl) return;
+  const btn = document.getElementById('delete-submit');
+  const errEl = document.getElementById('delete-error');
+  btn.disabled = true;
+  btn.textContent = 'Deleting...';
+  errEl.style.display = 'none';
+
+  try {
+    const resp = await fetch(API_DELETE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: pendingDeleteUrl }),
+    });
+    const result = await resp.json();
+    if (!resp.ok) {
+      errEl.textContent = result.error || 'Delete failed.';
+      errEl.style.display = '';
+    } else {
+      // Remove from local cache and re-render
+      delete measurementsCache[pendingDeleteUrl];
+      monitors = monitors.filter(m => m.url !== pendingDeleteUrl);
+      // If chart was showing this monitor, reset it
+      const select = document.getElementById('chart-select');
+      if (select.value === pendingDeleteUrl) {
+        if (chart) { chart.destroy(); chart = null; }
+        document.getElementById('sizeChart').style.display = 'none';
+        document.getElementById('chart-placeholder').style.display = '';
+        document.getElementById('chart-placeholder').textContent = 'Select a container above to view its size history';
+        select.value = '';
+      }
+      hideDeleteModal();
+      populateDropdown();
+      renderTable();
+    }
+  } catch (e) {
+    errEl.textContent = 'Network error.';
+    errEl.style.display = '';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Delete';
+  }
+}
 
 function showAddModal() {
   document.getElementById('add-modal').classList.add('visible');
